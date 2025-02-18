@@ -1,4 +1,4 @@
-# Watch Tower - Zeek ML Pipeline
+# ZREX Watch Tower - Zeek ML Pipeline
 
 ## Introduction
 Watch Tower is a cutting-edge cybersecurity solution that leverages the power of Zeek logs, machine learning, and the ELK stack to provide comprehensive threat detection and analysis. Unlike traditional security systems, Watch Tower combines signature-based and anomaly-based detection methods to identify both known and unknown threats.
