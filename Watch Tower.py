@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from fpdf import FPDF
 from sklearn.ensemble import RandomForestClassifier, IsolationForest
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.cluster import DBSCAN
 import json
 import requests
@@ -14,8 +14,41 @@ from elasticsearch import Elasticsearch
 import paramiko
 import datetime
 
+logging.basicConfig(filename='security_analysis.log', level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
 # Initialize Elasticsearch
+ELASTICSEARCH_HOST = "your_elasticsearch_host" 
 es = Elasticsearch([ELASTICSEARCH_HOST])
+
+# ----------------- MAIN FUNCTION -----------------
+
+def main():
+    log_file = "zeek_logs/conn.log"  # Or your log file path
+
+    while True:  # Loop until a valid IP or empty input is given
+        target_ip_input = input("Enter target IP (or press Enter for all IPs): ")
+
+        if target_ip_input.strip() == "":  # Check for empty input (analyze all IPs)
+            target_ip_to_analyze = None
+            break  # Exit the loop
+
+        try:
+            # Basic IP validation (improve as needed)
+            ip_parts = target_ip_input.split(".")
+            if len(ip_parts) == 4 and all(0 <= int(part) <= 255 for part in ip_parts):
+                target_ip_to_analyze = target_ip_input  # Valid IP
+                break  # Exit the loop
+            else:
+                print("Invalid IP address format. Please try again.")
+        except ValueError:  # Handle cases where conversion to int fails
+            print("Invalid IP address format. Please try again.")
+
+    anomalies, user_behavior = detect_threats(log_file, target_ip_to_analyze)
+
+
+if __name__ == "__main__":
+    main()
 
 # ----------------- PHASE 1: REMOTE LOG COLLECTION -----------------
 
@@ -55,10 +88,12 @@ def extract_features(df):
     for col in categorical_cols:
         df[col] = LabelEncoder().fit_transform(df[col].astype(str))
 
-    numerical_cols = ['duration', 'orig_bytes', 'resp_bytes'] # Add other numerical columns as needed
-    if numerical_cols: # Check if any numerical columns are available
+    numerical_cols = ['duration', 'orig_bytes', 'resp_bytes']  # Add other numerical columns as needed
+    if numerical_cols and not df[numerical_cols].empty:  # Check if numerical columns exist and are not empty
         scaler = StandardScaler()
         df[numerical_cols] = scaler.fit_transform(df[numerical_cols])  # Scale numerical features
+    elif numerical_cols and df[numerical_cols].empty:
+        logging.warning("Numerical columns are empty, skipping scaling.")
 
     return df
 
@@ -203,9 +238,12 @@ def detect_threats(log_file, target_ip=None):
 
         # Enhanced Alert Output (Example)
         for _, row in anomalies.iterrows():
-            print(f"  - Threat: {row['detection_method']} | Source: {row['id.orig_h']} | Dest: {row['id.resp_h']} | Proto: {row['proto']} | Confidence: {row['confidence']:.2f}% | Time: {row['alert_timestamp']}") # More details
+            print(f" - Threat: {row['detection_method']} | Source: {row['id.orig_h']} | Dest: {row['id.resp_h']} | Proto: {row['proto']} | Confidence: {row['confidence']:.2f}% | Time: {row['alert_timestamp']}")  # More details
+            logging.info(f"Threat detected: Source: {row['id.orig_h']}, Destination: {row['id.resp_h']}, Method: {row['detection_method']}") # Log the specific threat
+
     else:
         print("No threats detected.")
+        logging.info("No threats detected.") # Log when no threats are found
 
     return anomalies, user_behavior
     
@@ -320,4 +358,5 @@ def generate_weekly_report(week, anomalies, user_behavior):
     report_filename = f"security_report_week_{week}_{timestamp}.pdf"
     pdf.output(report_filename, "F")
     print(f"Report generated: {report_filename}")
-    logging.info(f"Report generated: {report_filename}") # Log the report generation
+    logging.info(f"Report generated: {report_filename}")  # Log the report generation
+    return report_filename # Return the filename for potential further use
