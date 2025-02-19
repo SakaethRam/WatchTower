@@ -26,6 +26,8 @@ The Watch Tower pipeline consists of seven phases:
 6. **Prediction and Alerting:** Detects threats and anomalies using the trained models and generates alerts.
 7. **Report Generation:** Creates comprehensive weekly security reports.
 
+![Architecture](https://github.com/user-attachments/assets/aecd722d-ad04-4767-9d82-afabbec44971)
+
 ## Getting Started
 
 To set up and run Watch Tower, follow these steps:
