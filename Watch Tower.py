@@ -14,41 +14,11 @@ from elasticsearch import Elasticsearch
 import paramiko
 import datetime
 
-logging.basicConfig(filename='security_analysis.log', level=logging.INFO, 
-                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Initialize Elasticsearch
-ELASTICSEARCH_HOST = "your_elasticsearch_host" 
-es = Elasticsearch([ELASTICSEARCH_HOST])
-
-# ----------------- MAIN FUNCTION -----------------
-
-def main():
-    log_file = "zeek_logs/conn.log"  # Or your log file path
-
-    while True:  # Loop until a valid IP or empty input is given
-        target_ip_input = input("Enter target IP (or press Enter for all IPs): ")
-
-        if target_ip_input.strip() == "":  # Check for empty input (analyze all IPs)
-            target_ip_to_analyze = None
-            break  # Exit the loop
-
-        try:
-            # Basic IP validation (improve as needed)
-            ip_parts = target_ip_input.split(".")
-            if len(ip_parts) == 4 and all(0 <= int(part) <= 255 for part in ip_parts):
-                target_ip_to_analyze = target_ip_input  # Valid IP
-                break  # Exit the loop
-            else:
-                print("Invalid IP address format. Please try again.")
-        except ValueError:  # Handle cases where conversion to int fails
-            print("Invalid IP address format. Please try again.")
-
-    anomalies, user_behavior = detect_threats(log_file, target_ip_to_analyze)
-
-
-if __name__ == "__main__":
-    main()
+"""es = Elasticsearch(
+    api_key=("id", "api_key")
+)"""
 
 # ----------------- PHASE 1: REMOTE LOG COLLECTION -----------------
 
@@ -66,8 +36,8 @@ def fetch_remote_logs(remote_ip, remote_user, remote_password, remote_log_path, 
         print("Successfully fetched remote logs.")
     except Exception as e:
         print(f"Failed to fetch logs: {e}")
-
-# ----------------- PHASE 2: ZEEK LOG PARSING -----------------
+        
+    # ----------------- PHASE 2: ZEEK LOG PARSING -----------------
 
 def parse_zeek_log(log_file, target_ip=None):
     """Parses Zeek connection logs and extracts relevant features, filtering by target IP if provided."""
@@ -79,7 +49,7 @@ def parse_zeek_log(log_file, target_ip=None):
         df = df[(df['id.orig_h'] == target_ip) | (df['id.resp_h'] == target_ip)]
 
     return df
-
+    
 # ----------------- PHASE 3: FEATURE ENGINEERING -----------------
 
 def extract_features(df):
@@ -96,7 +66,7 @@ def extract_features(df):
         logging.warning("Numerical columns are empty, skipping scaling.")
 
     return df
-
+    
 # ----------------- PHASE 4: USER BEHAVIOR PROFILING -----------------
 
 def analyze_user_behavior(df):
@@ -114,92 +84,141 @@ def analyze_user_behavior(df):
     user_stats['behavior_anomalies'] = user_stats.apply(lambda row: 'Anomaly detected' if row['duration'] > 1000 else 'Normal', axis=1)
     
     return user_stats
-
+    
 # ----------------- PHASE 5: TRAIN SUPERVISED ML MODEL -----------------
 
-import kagglehub
-
 def train_supervised_model():
-    # Download the latest version of the dataset
-    path = kagglehub.dataset_download("solarmainframe/ids-intrusion-csv")
-    print("Path to dataset files:", path)
-
+    # Upload dataset manually
+    uploaded = files.upload()
+    
+    # Get the filename
+    zip_filename = list(uploaded.keys())[0]
+    print(f"Uploaded file: {zip_filename}")
+    
+    # Extract zip file
+    with zipfile.ZipFile(io.BytesIO(uploaded[zip_filename]), 'r') as zip_ref:
+        zip_ref.extractall("dataset")
+    
+    # Find the CSV file inside the extracted folder
+    extracted_files = os.listdir("dataset")
+    csv_filename = [file for file in extracted_files if file.endswith(".csv")][0]
+    csv_path = os.path.join("dataset", csv_filename)
+    
     # Load the dataset into a DataFrame
-    df = pd.read_csv(path + '/dataset.csv')  # Update with the correct file name if different
+    df = pd.read_csv(csv_path)
     
     # Extract features and target
-    X = df.drop(columns=['id.orig_h', 'id.resp_h', 'ts', 'label'])  # Ensure you drop any irrelevant columns
-    y = df['label'].apply(lambda x: 1 if x == 'attack' else 0)  # Assuming 'attack' and 'normal' labels
+    X = df.drop(columns=['Timestamp', 'Label'])  # Drop timestamp and target column
+    y = df['Label'].apply(lambda x: 1 if x != 'Benign' else 0)  # Convert labels to binary
 
-    # Split the data into training and testing sets
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    # Handle missing, NaN, or infinite values
+    X.replace([np.inf, -np.inf], np.nan, inplace=True)  # Convert infinities to NaN
+    X.dropna(inplace=True)  # Remove rows with NaN values
+
+    # Ensure data types are valid
+    X = X.astype(np.float32)
+
+    # Split the data
+    X_train, X_test, y_train, y_test = train_test_split(X, y.loc[X.index], test_size=0.2, random_state=42)
 
     # Initialize and train the model
     model = RandomForestClassifier(n_estimators=100)
     model.fit(X_train, y_train)
-    
+
     # Evaluate the model
     accuracy = model.score(X_test, y_test)
-    
+
     # Save the model to a file
     joblib.dump(model, 'rf_model.pkl')
     print(f"Supervised Model Trained! Accuracy: {accuracy:.2f}")
 
-# Call the function to train the model
+# Call the function
 train_supervised_model()
+
+from sklearn.model_selection import cross_val_score
+scores = cross_val_score(model, X, y, cv=5)
+print(f"Cross-Validation Accuracy: {scores.mean():.4f}")
+
+from sklearn.metrics import classification_report
+y_pred = model.predict(X_test)
+print(classification_report(y_test, y_pred))
 
 # ----------------- PHASE 6: TRAIN UNSUPERVISED ML MODEL -----------------
 
-def train_unsupervised_model(contamination=0.02, model_filename='iso_forest.pkl'):
-    """Trains an Isolation Forest model to detect zero-day threats.
+import zipfile
+from google.colab import files
 
+def train_unsupervised_model_from_colab(contamination=0.02, model_filename='iso_forest.pkl'):
+    """Trains an Isolation Forest model to detect zero-day threats using an uploaded ZIP dataset in Google Colab.
+    
     Args:
         contamination (float, optional): The proportion of outliers in the data set. Defaults to 0.02.
         model_filename (str, optional): The name of the file to save the trained model. Defaults to 'iso_forest.pkl'.
     """
     try:
-        # Download the dataset.  Handle potential download errors.
-        path = kagglehub.dataset_download("solarmainframe/ids-intrusion-csv", force=False, quiet=False)  # force=False prevents redownloading if it exists. quiet=False shows download progress
-        print("Path to dataset files:", path)
-
-        # Construct the full path to the CSV. Be more robust.
-        csv_filepath = os.path.join(path, 'dataset.csv') #  More robust path joining
-        if not os.path.exists(csv_filepath):
-            raise FileNotFoundError(f"CSV file not found at {csv_filepath}")
-
-        # Load the dataset. Handle potential file reading errors.
-        df = pd.read_csv(csv_filepath)
-
-        # Extract features.  Be explicit about which features you're using.
-        # This makes it easier to understand and maintain.
-        features_to_use = [col for col in df.columns if col not in ['id.orig_h', 'id.resp_h', 'ts', 'label']] # Example: Exclude 'label' if it exists
+        # Upload ZIP file
+        print("Please upload your ZIP file containing the dataset")
+        uploaded = files.upload()
+        
+        if not uploaded:
+            raise FileNotFoundError("No file uploaded. Please upload a valid ZIP file.")
+        
+        zip_path = list(uploaded.keys())[0]  # Get the uploaded file name
+        print(f"Uploaded dataset ZIP: {zip_path}")
+        
+        # Extract ZIP file
+        extract_folder = '/mnt/data/extracted_dataset'
+        os.makedirs(extract_folder, exist_ok=True)
+        
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_folder)
+        
+        print(f"Dataset extracted to: {extract_folder}")
+        
+        # Identify CSV file in extracted folder
+        csv_files = [f for f in os.listdir(extract_folder) if f.endswith('.csv')]
+        if not csv_files:
+            raise FileNotFoundError("No CSV file found in the extracted dataset.")
+        
+        dataset_path = os.path.join(extract_folder, csv_files[0])  # Use the first CSV found
+        print(f"Using dataset: {dataset_path}")
+        
+        # Load the dataset
+        df = pd.read_csv(dataset_path)
+        
+        # Convert timestamp columns if they exist
+        if 'ts' in df.columns:
+            df['ts'] = pd.to_datetime(df['ts'], errors='coerce').astype('int64') // 10**9  # Convert to Unix timestamp
+        
+        # Extract features and ensure only numeric columns are used
+        df = df.select_dtypes(include=['number']).dropna()
+        features_to_use = [col for col in df.columns if col not in ['id.orig_h', 'id.resp_h', 'label']]
         X = df[features_to_use]
-
-        # Train the model.  Allow for parameter tuning.
+        
+        # Train the model
         model = IsolationForest(contamination=contamination, random_state=42)
         model.fit(X)
-
-        # Get anomaly scores and predictions.
+        
+        # Get anomaly scores and predictions
         scores = model.decision_function(X)
         anomalies = model.predict(X)
-
-        # Calculate and print anomaly statistics.
+        
+        # Calculate anomaly statistics
         num_anomalies = (anomalies == -1).sum()
         total_points = len(X)
         anomaly_percentage = (num_anomalies / total_points) * 100
-
-        # Save the model.
+        
+        # Save the model
         joblib.dump(model, model_filename)
-
+        
         print(f"Unsupervised Model Trained! Anomalies detected: {num_anomalies}/{total_points} ({anomaly_percentage:.2f}%)")
         print(f"Model saved to {model_filename}")
-
-    except Exception as e:  # Catch and handle exceptions
+        
+    except Exception as e:
         print(f"An error occurred: {e}")
 
-
-# Call the function to train the model. You can now customize parameters.
-train_unsupervised_model(contamination=0.01, model_filename='improved_iso_forest.pkl') # Example of changing the parameters
+# Call the function
+train_unsupervised_model_from_colab(contamination=0.01, model_filename='improved_iso_forest.pkl')
 
 # ----------------- PHASE 7: PREDICTION AND ALERTING -----------------
 
@@ -360,3 +379,32 @@ def generate_weekly_report(week, anomalies, user_behavior):
     print(f"Report generated: {report_filename}")
     logging.info(f"Report generated: {report_filename}")  # Log the report generation
     return report_filename # Return the filename for potential further use
+    
+# ----------------- MAIN FUNCTION -----------------
+
+def main():
+    log_file = "zeek_logs/conn.log"  # Or your log file path
+
+    while True:  # Loop until a valid IP or empty input is given
+        target_ip_input = input("Enter target IP (or press Enter for all IPs): ")
+
+        if target_ip_input.strip() == "":  # Check for empty input (analyze all IPs)
+            target_ip_to_analyze = None
+            break  # Exit the loop
+
+        try:
+            # Basic IP validation (improve as needed)
+            ip_parts = target_ip_input.split(".")
+            if len(ip_parts) == 4 and all(0 <= int(part) <= 255 for part in ip_parts):
+                target_ip_to_analyze = target_ip_input  # Valid IP
+                break  # Exit the loop
+            else:
+                print("Invalid IP address format. Please try again.")
+        except ValueError:  # Handle cases where conversion to int fails
+            print("Invalid IP address format. Please try again.")
+
+    anomalies, user_behavior = detect_threats(log_file, target_ip_to_analyze)
+
+
+if __name__ == "__main__":
+    main()
