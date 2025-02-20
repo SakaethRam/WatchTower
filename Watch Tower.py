@@ -268,6 +268,19 @@ def detect_threats(log_file, target_ip=None):
     
 # ----------------- PHASE 8: REPORT GENERATION -----------------
 
+import schedule
+import time
+
+def job():
+    generate_weekly_report(week=7, anomalies=anomalies_df, user_behavior=user_behavior_df)  # Provide actual data
+
+# Schedule the function to run every Monday at 10 AM
+schedule.every().monday.at("10:00").do(job)
+
+while True:
+    schedule.run_pending()
+    time.sleep(60)  
+    
 def generate_weekly_report(week, anomalies, user_behavior):
     """Generates a PDF security report."""
 
